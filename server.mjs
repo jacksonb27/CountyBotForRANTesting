@@ -191,7 +191,7 @@ async function loadSheet() {
     }
   }
 
-  console.log(`✅ Loaded ${rows.length} rows.`);
+  console.log(`Loaded ${rows.length} rows.`);
 }
 
 // ------------------------------------
