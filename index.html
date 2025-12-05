@@ -92,14 +92,19 @@
       box.value = '';
 
       try {
-        // Just send q. The backend handles parsing & search.
-        const r = await fetch('/ask?' + new URLSearchParams({ q }));
+        const r = await fetch('/ask', {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ question: q })
+        });
+
         const data = await r.json();
-        addMsg('bot', data.text || 'No answer.', data.data);
+        addMsg('bot', data.answer || 'No answer.');
       } catch (err) {
         addMsg('bot', 'Sorry—there was a network error.');
       }
     });
+
 
     // Focus the box on load
     box.focus();

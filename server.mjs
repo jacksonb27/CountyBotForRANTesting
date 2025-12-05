@@ -4,10 +4,19 @@ import Papa from 'papaparse';
 import fetch from 'node-fetch';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import OpenAI from "openai";
+import dotenv from "dotenv";
+
+// ------------------------------------
+// Key Config
+// ------------------------------------
+const openaiKeyNODE = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 // ------------------------------------
 // Config
 // ------------------------------------
+dotenv.config();
+
 const VOCAB = [
   "population", "pop", "people", "residents",
   "hispanic", "spanish",
@@ -429,15 +438,41 @@ app.get('/health', (_req, res) => {
   res.json({ ok: true, rows: rows.length, totals, regionTotals });
 });
 
-app.post('/ask', (req, res) => {
-  const { query } = req.body || {};
-  if (!query || typeof query !== "string") {
-    return res.status(400).json({ error: 'Please provide {"query":"..."}' });
-  }
-  const result = answerQuestion(query);
-  res.json({ answer: result.answer, text: result.answer, meta: result.meta });
+app.post("/ask", async (req, res) => {
+    try {
+        const question = req.body.question;
+        const sheetData = rows; //await fetchCsv(); // your CSV → array of objects
+
+        const completion = await openaiKeyNODE.chat.completions.create({
+            model: "gpt-4.1-mini",
+            messages: [
+                {
+                    role: "system",
+                    content: `
+You are RANBot, an Alabama county information assistant.
+You must ONLY answer using the sheet data provided.
+If a value doesn't exist, say you cannot find it.
+
+Sheet data:
+${JSON.stringify(sheetData, null, 2)}
+                    `
+                },
+                {
+                    role: "user",
+                    content: question
+                }
+            ]
+        });
+
+        res.json({ answer: completion.choices[0].message.content });
+
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: "Server error" });
+    }
 });
 
+/*
 app.get('/ask', (req, res) => {
   const q = req.query.q;
   if (!q || typeof q !== "string") {
@@ -446,6 +481,7 @@ app.get('/ask', (req, res) => {
   const result = answerQuestion(q);
   res.json({ answer: result.answer, text: result.answer, meta: result.meta });
 });
+*/
 
 app.post('/reload', async (_req, res) => {
   try {
@@ -463,6 +499,7 @@ const start = async () => {
   await loadSheet();
   app.listen(PORT, () => {
     console.log(`County bot running at http://localhost:${PORT}`);
+    console.log("API KEY LOADED?", !!process.env.OPENAI_API_KEY);
   });
 };
 start();
