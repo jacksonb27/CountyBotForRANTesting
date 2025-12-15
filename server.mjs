@@ -208,28 +208,46 @@ async function loadSheet() {
 // ------------------------------------
 function extractCounty(q) {
   const cq = clean(q);
-  const padded = ` ${cq} `;
-  const counties = [...new Set(rows.map((r) => r.county))];
+  const tokens = cq.split(" ");
 
+  const counties = [...new Set(rows.map(r => clean(r.county)))];
+
+  // Exact match first (strong signal)
   for (const c of counties) {
-    const cc = clean(c);
-    if (padded.includes(` ${cc} county `) || padded.includes(` ${cc} `)) {
-      return c;
+    if (tokens.includes(c)) {
+      return rows.find(r => clean(r.county) === c).county;
     }
   }
+
+  // Fallback: "X county"
+  for (const c of counties) {
+    if (cq.includes(`${c} county`)) {
+      return rows.find(r => clean(r.county) === c).county;
+    }
+  }
+
   return null;
 }
 
+// guess what metric is being calculated/ouputt to the screen
 function guessMetric(q) {
   q = clean(q);
-  if (/\b(region|area)\b/.test(q)) return "region";
+
   if (/\b(projected|proj)\b/.test(q) && /\b(hispanic|spanish)\b/.test(q))
     return "projected";
-  if (/\b(hispanic|spanish)\b/.test(q)) return "hispanic";
-  if (/\b(projected|proj)\b/.test(q)) return "projected";
-  if (/\b(population|pop|people|residents)\b/.test(q)) return "population";
+
+  if (/\b(hispanic|spanish)\b/.test(q))
+    return "hispanic";
+
+  if (/\b(projected|proj)\b/.test(q))
+    return "projected";
+
+  if (/\b(population|pop|people|residents)\b/.test(q))
+    return "population";
+
   return "population";
 }
+
 
 function wantsTotal(q, countyFound) {
   q = clean(q);
@@ -253,9 +271,25 @@ function normalizeRegion(raw) {
   return null;
 }
 
-function extractRegion(question) {
-  return normalizeRegion(question);
+function extractRegion(q) {
+  q = clean(q);
+
+  if (q.includes("central")) return "central";
+  if (q.includes("east")) return "east";
+  if (q.includes("west")) return "west";
+
+  return null;
 }
+
+function asksForRegion(q) {
+  q = clean(q);
+  return (
+    q.startsWith("which region") ||
+    q.includes("what region") ||
+    q.includes("which area")
+  );
+}
+
 
 function wantsPercentage(q) {
   q = clean(q);
@@ -315,7 +349,21 @@ function answerQuestion(query) {
   const totalFlag = !percentFlag && wantsTotal(query, county);
 
   // ------------------------------------
-  // Region % calculations (MUST COME FIRST)
+  // COUNTY → REGION QUESTIONS (MUST COME FIRST)
+  // e.g. "Which region is Colbert County in?"
+  // ------------------------------------
+  if (county && asksForRegion(query)) {
+    const row = findRow(county, "population"); // any row with region is fine
+    if (row && row.region) {
+      return {
+        answer: `${row.county} County is in the ${row.region} region.`,
+        meta: { type: "county", county: row.county, metric: "region" }
+      };
+    }
+  }
+
+  // ------------------------------------
+  // REGION % CALCULATIONS
   // ------------------------------------
   if (percentFlag && region) {
     const k = region.toLowerCase();
@@ -343,34 +391,92 @@ function answerQuestion(query) {
         meta: { type: "percent", region, metric }
       };
     }
+
+    return {
+      answer: `I can identify the ${region} region, but I can't calculate a percentage for ${metric}.`,
+      meta: { type: "error", scope: "region-percent", region, metric }
+    };
   }
 
   // ------------------------------------
-  // Totals
+  // REGION TOTALS
+  // ------------------------------------
+  if (totalFlag && region) {
+    const k = region.toLowerCase();
+
+    if (metric === "population") {
+      return {
+        answer: `The total population of the ${region} region is ${formatNumber(
+          "population",
+          regionTotals[k].population
+        )}.`,
+        meta: { type: "total", scope: "region", region, metric }
+      };
+    }
+
+    if (metric === "hispanic") {
+      return {
+        answer: `The total Hispanic population of the ${region} region is ${formatNumber(
+          "hispanic",
+          regionTotals[k].hispanic
+        )}.`,
+        meta: { type: "total", scope: "region", region, metric }
+      };
+    }
+
+    if (metric === "projected") {
+      return {
+        answer: `The total projected Hispanic population of the ${region} region is ${formatNumber(
+          "projected",
+          regionTotals[k].projected
+        )}.`,
+        meta: { type: "total", scope: "region", region, metric }
+      };
+    }
+
+    return {
+      answer: `I found the ${region} region, but I don't have ${metric} totals for it.`,
+      meta: { type: "error", region, metric }
+    };
+  }
+
+  // ------------------------------------
+  // ALL-COUNTIES TOTALS
   // ------------------------------------
   if (totalFlag && !county) {
     if (metric === "population") {
       return {
-        answer: `The total population across all counties is ${formatNumber("population", totals.population)}.`,
+        answer: `The total population across all counties is ${formatNumber(
+          "population",
+          totals.population
+        )}.`,
         meta: { type: "total", metric }
       };
     }
+
     if (metric === "hispanic") {
       return {
-        answer: `The total Hispanic population across all counties is ${formatNumber("hispanic", totals.hispanic)}.`,
+        answer: `The total Hispanic population across all counties is ${formatNumber(
+          "hispanic",
+          totals.hispanic
+        )}.`,
         meta: { type: "total", metric }
       };
     }
+
     if (metric === "projected") {
       return {
-        answer: `The total projected Hispanic population across all counties is ${formatNumber("projected", totals.projected)}.`,
+        answer: `The total projected Hispanic population across all counties is ${formatNumber(
+          "projected",
+          totals.projected
+        )}.`,
         meta: { type: "total", metric }
       };
     }
   }
 
   // ------------------------------------
-  // No county found (AFTER region math!)
+  // NO COUNTY FOUND (AFTER REGION LOGIC)
   // ------------------------------------
   if (!county) {
     return {
@@ -380,7 +486,7 @@ function answerQuestion(query) {
   }
 
   // ------------------------------------
-  // Per-county data
+  // PER-COUNTY DATA
   // ------------------------------------
   const row = findRow(county, metric);
   if (!row) {
@@ -390,38 +496,33 @@ function answerQuestion(query) {
     };
   }
 
-  if (metric === "region" && row.region) {
-    return {
-      answer: `${row.county} County is in the ${row.region} region.`,
-      meta: { type: "county", county: row.county, metric }
-    };
-  }
-
   if (metric === "population" && row.population != null) {
     return {
-      answer: `${row.county} County has a population of ${formatNumber("population", row.population)}.`,
+      answer: `${row.county} County has a population of ${formatNumber(
+        "population",
+        row.population
+      )}.`,
       meta: { type: "county", county: row.county, metric }
     };
   }
 
   if (metric === "hispanic" && row.hispanicPopulation != null) {
     return {
-      answer: `${row.county} County has a Hispanic population of ${formatNumber("hispanic", row.hispanicPopulation)}.`,
+      answer: `${row.county} County has a Hispanic population of ${formatNumber(
+        "hispanic",
+        row.hispanicPopulation
+      )}.`,
       meta: { type: "county", county: row.county, metric }
     };
   }
 
   if (metric === "projected" && row.projectedPopulation != null) {
     return {
-      answer: `The projected Hispanic population of ${row.county} County is ${formatNumber("projected", row.projectedPopulation)}.`,
+      answer: `The projected Hispanic population of ${row.county} County is ${formatNumber(
+        "projected",
+        row.projectedPopulation
+      )}.`,
       meta: { type: "county", county: row.county, metric }
-    };
-  }
-
-  if (metric === "projected" && row.hispanicPopulation != null) {
-    return {
-      answer: `I don't have projected Hispanic data for ${row.county} County, but its current Hispanic population is ${formatNumber("hispanic", row.hispanicPopulation)}.`,
-      meta: { type: "fallback", county: row.county, metric }
     };
   }
 
@@ -431,6 +532,7 @@ function answerQuestion(query) {
   };
 }
 
+
 // ------------------------------------
 // Routes
 // ------------------------------------
@@ -439,37 +541,76 @@ app.get('/health', (_req, res) => {
 });
 
 app.post("/ask", async (req, res) => {
-    try {
-        const question = req.body.question;
-        const sheetData = rows; //await fetchCsv(); // your CSV → array of objects
-
-        const completion = await openaiKeyNODE.chat.completions.create({
-            model: "gpt-4.1-mini",
-            messages: [
-                {
-                    role: "system",
-                    content: `
-You are RANBot, an Alabama county information assistant.
-You must ONLY answer using the sheet data provided.
-If a value doesn't exist, say you cannot find it.
-
-Sheet data:
-${JSON.stringify(sheetData, null, 2)}
-                    `
-                },
-                {
-                    role: "user",
-                    content: question
-                }
-            ]
-        });
-
-        res.json({ answer: completion.choices[0].message.content });
-
-    } catch (err) {
-        console.error(err);
-        res.status(500).json({ error: "Server error" });
+  try {
+    const question = req.body.question;
+    if (!question || typeof question !== "string") {
+      return res.status(400).json({ error: "Missing question" });
     }
+
+    const tools = [
+      {
+        type: "function",
+        function: {
+          name: "compute_answer",
+          description: "Compute exact answers using verified county data",
+          parameters: {
+            type: "object",
+            properties: {
+              question: {
+                type: "string",
+                description: "The user's original question"
+              }
+            },
+            required: ["question"]
+          }
+        }
+      }
+    ];
+
+    // 🔹 FIRST MODEL CALL (intent + optional tool call)
+    const completion = await openaiKeyNODE.chat.completions.create({
+      model: "gpt-4.1-mini",
+      messages: [
+        {
+          role: "system",
+          content:
+              "You are RANBot. If the user mentions a name that matches a known Alabama county, you MUST call the compute_answer tool. Do NOT answer from general knowledge."
+        },
+        { role: "user", content: question }
+      ],
+      tools,
+      tool_choice: "auto"
+    });
+
+    // 🔹 ADD THIS BLOCK RIGHT HERE ⬇️
+    const msg = completion.choices[0].message;
+
+    // ---- Conversational response (no math needed) ----
+    if (!msg.tool_calls) {
+      return res.json({ answer: msg.content });
+    }
+
+    // 🔹 TOOL PATH CONTINUES BELOW
+    const toolCall = msg.tool_calls[0];
+    if (toolCall.function.name !== "compute_answer") {
+      return res.status(500).json({ error: "Unexpected tool call" });
+    }
+
+    const args = JSON.parse(toolCall.function.arguments);
+
+    // ---- Deterministic math ----
+    const result = answerQuestion(args.question);
+
+    res.json({
+      answer: result.answer,
+      meta: result.meta
+    });
+
+
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Server error" });
+  }
 });
 
 /*
