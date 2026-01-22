@@ -214,7 +214,7 @@ function extractCounty(q) {
 
   // Exact match first (strong signal)
   for (const c of counties) {
-    if (tokens.includes(c)) {
+    if (cq.includes(`${c} county`)) {
       return rows.find(r => clean(r.county) === c).county;
     }
   }
@@ -363,7 +363,7 @@ function answerQuestion(query) {
   }
 
   // ------------------------------------
-  // REGION % CALCULATIONS
+  // Region % CALCULATIONS
   // ------------------------------------
   if (percentFlag && region) {
     const k = region.toLowerCase();
@@ -397,6 +397,67 @@ function answerQuestion(query) {
       meta: { type: "error", scope: "region-percent", region, metric }
     };
   }
+
+  // ------------------------------------
+  // Global % calculations
+  // ------------------------------------
+  if (percentFlag && !county && !region) {
+
+    if (metric === "hispanic") {
+      const pct = (totals.hispanic / totals.population) * 100;
+
+      return {
+        answer: `${pct.toFixed(1)}% of the total population is Hispanic.`,
+        meta: {
+          type: "percent",
+          scope: "global",
+          metric: "hispanic"
+        }
+      };
+    }
+
+    // optional future-proofing
+    return {
+      answer: `I can calculate percentages globally, but not for ${metric}.`,
+      meta: { type: "error", scope: "global-percent", metric }
+    };
+  }
+
+  // ------------------------------------
+  // County % calculations
+  // ------------------------------------
+  if (percentFlag && county) {
+    const popRow = findRow(county, "population");
+    const hisRow = findRow(county, "hispanic");
+
+    if (!popRow || popRow.population == null) {
+      return {
+        answer: `I don't have total population data for ${county} County.`,
+        meta: { type: "error", county, metric: "population" }
+      };
+    }
+
+    if (!hisRow || hisRow.hispanicPopulation == null) {
+      return {
+        answer: `I don't have Hispanic population data for ${county} County.`,
+        meta: { type: "error", county, metric: "hispanic" }
+      };
+    }
+
+    const pct = (hisRow.hispanicPopulation / popRow.population) * 100;
+
+    return {
+      answer: `${pct.toFixed(1)}% of ${county} County's population is Hispanic.`,
+      meta: {
+        type: "percent",
+        scope: "county",
+        county,
+        metric: "hispanic"
+      }
+    };
+  }
+
+  
 
   // ------------------------------------
   // REGION TOTALS
@@ -574,7 +635,7 @@ app.post("/ask", async (req, res) => {
         {
           role: "system",
           content:
-              "You are RANBot. If the user mentions a name that matches a known Alabama county, you MUST call the compute_answer tool. Do NOT answer from general knowledge."
+              "You are RANBot. If the user asks a factual, numeric, statistical, population, percentage, or demographic question, you MUST call the compute_answer tool. Do NOT answer from general knowledge."
         },
         { role: "user", content: question }
       ],
